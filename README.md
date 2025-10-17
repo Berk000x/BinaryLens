@@ -31,3 +31,14 @@ You need to link **OpenSSL** and **IDA’s SDK** in Visual Studio’s project se
 ## Compatibility
 The plugin requires access to the Hex-Rays decompiler to function.
 Tested on Windows 10/11 with IDA 9.1 Pro. Mainly tested on x86 binaries but should also work with other architectures.
+
+## FAQ
+### Why not add more model options?
+We have tested many models, but only the currently supported ones passed our checks. Adding new models is simple, but not recommended.
+
+### Why not send the decompiled functions chunk by chunk?
+The models cannot accurately rename functions without analyzing the entire binary at once.
+
+## TODO
+1. Compress decompiled subroutines before sending (remove local variable definitions, etc.).  
+2. Allow interactive chat with the model on a selected function.
