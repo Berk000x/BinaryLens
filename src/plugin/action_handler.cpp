@@ -35,8 +35,9 @@ bool HandleAnalysisActions(const char* action_name) {
     }
 
     if (strcmp(action_name, "about") == 0) {
-        info("BinaryLens - an IDA plugin that uses language models to speed up binary analysis.\n\nFind more info at github.com/Berk000x/BinaryLens.\n\nv1.0.0\n");
-        LogMessage(LOG_PATH, 1, "[BinaryLens] Option 2 pressed\n");
+        info("BinaryLens - an IDA plugin that uses language models to speed up binary analysis."
+            "\n\nFind more info at github.com/Berk000x/BinaryLens.\n\nv1.0.1\n"
+        );
     }
 
     return true;
@@ -75,8 +76,8 @@ public:
 
     virtual int idaapi activate(action_activation_ctx_t* ctx) override {
         if (func) {
-			std::string action_name = ctx->action;
-			RemoveSubstring(action_name, "BinaryLens:");
+            std::string action_name = ctx->action;
+            RemoveSubstring(action_name, "BinaryLens:");
             return func(action_name.c_str()) ? 1 : 0;
         }
         return 0;
@@ -92,19 +93,86 @@ FunctionActionHandler model_handler(HandleModelActions);
 FunctionActionHandler api_key_handler(HandleApiKeyActions);
 
 // Action descriptors
-const action_desc_t rename_subs_action = ACTION_DESC_LITERAL("BinaryLens:rename_subs", "Rename all subroutines", &analysis_handler, nullptr, nullptr, -1);
-const action_desc_t rename_vars_action = ACTION_DESC_LITERAL("BinaryLens:rename_vars", "Rename variables", &analysis_handler, nullptr, nullptr, -1);
+const action_desc_t rename_subs_action = ACTION_DESC_LITERAL(
+    "BinaryLens:rename_subs",
+    "Rename all subroutines",
+    &analysis_handler,
+    nullptr,
+    nullptr,
+    -1
+);
 
-const action_desc_t gemini_25_pro_action = ACTION_DESC_LITERAL("BinaryLens:gemini-2.5-pro", "Gemini-2.5-Pro", &model_handler, nullptr, nullptr, -1);
-const action_desc_t gemini_api_action = ACTION_DESC_LITERAL("BinaryLens:gemini_api_key", "Set API key", &api_key_handler, nullptr, nullptr, -1);
+const action_desc_t rename_vars_action = ACTION_DESC_LITERAL(
+    "BinaryLens:rename_vars",
+    "Rename variables",
+    &analysis_handler,
+    nullptr,
+    nullptr,
+    -1
+);
 
-const action_desc_t deepseek_chat_action = ACTION_DESC_LITERAL("BinaryLens:deepseek-chat", "Deepseek-chat", &model_handler, nullptr, nullptr, -1);
-const action_desc_t deepseek_api_action = ACTION_DESC_LITERAL("BinaryLens:deepseek_api_key", "Set API key", &api_key_handler, nullptr, nullptr, -1);
+const action_desc_t gemini_25_pro_action = ACTION_DESC_LITERAL(
+    "BinaryLens:gemini-2.5-pro",
+    "Gemini-2.5-Pro",
+    &model_handler,
+    nullptr,
+    nullptr,
+    -1
+);
 
-const action_desc_t gpt_5_action = ACTION_DESC_LITERAL("BinaryLens:gpt-5", "GPT-5", &model_handler, nullptr, nullptr, -1);
-const action_desc_t openai_api_action = ACTION_DESC_LITERAL("BinaryLens:openai_api_key", "Set API key", &api_key_handler, nullptr, nullptr, -1);
+const action_desc_t gemini_api_action = ACTION_DESC_LITERAL(
+    "BinaryLens:gemini_api_key",
+    "Set API key",
+    &api_key_handler,
+    nullptr,
+    nullptr,
+    -1
+);
 
-const action_desc_t about_action = ACTION_DESC_LITERAL("BinaryLens:about", "About", &analysis_handler, nullptr, nullptr, -1);
+const action_desc_t deepseek_chat_action = ACTION_DESC_LITERAL(
+    "BinaryLens:deepseek-chat",
+    "Deepseek-chat",
+    &model_handler,
+    nullptr,
+    nullptr,
+    -1
+);
+
+const action_desc_t deepseek_api_action = ACTION_DESC_LITERAL(
+    "BinaryLens:deepseek_api_key",
+    "Set API key",
+    &api_key_handler,
+    nullptr,
+    nullptr,
+    -1
+);
+
+const action_desc_t gpt_5_action = ACTION_DESC_LITERAL(
+    "BinaryLens:gpt-5",
+    "GPT-5",
+    &model_handler,
+    nullptr,
+    nullptr,
+    -1
+);
+
+const action_desc_t openai_api_action = ACTION_DESC_LITERAL(
+    "BinaryLens:openai_api_key",
+    "Set API key",
+    &api_key_handler,
+    nullptr,
+    nullptr,
+    -1
+);
+
+const action_desc_t about_action = ACTION_DESC_LITERAL(
+    "BinaryLens:about",
+    "About",
+    &analysis_handler,
+    nullptr,
+    nullptr,
+    -1
+);
 
 ssize_t idaapi WidgetPopupCallback(void* user_data, int notification_code, va_list va) {
     if (notification_code == ui_populating_widget_popup) {
@@ -125,15 +193,15 @@ plugmod_t* idaapi init() {
     SetConsoleOutputCP(CP_UTF8);
     DeleteFileA("BinaryLensLog.txt");
 
-    if (!register_action(rename_subs_action)      ||  
-        !register_action(rename_vars_action)      ||
-        !register_action(about_action)            ||
-        !register_action(gemini_25_pro_action)    ||
-        !register_action(deepseek_chat_action)    ||
-		!register_action(gpt_5_action)            ||
-		!register_action(gemini_api_action)       ||
-		!register_action(deepseek_api_action)     ||
-		!register_action(openai_api_action)) {
+    if (!register_action(rename_subs_action)   ||
+        !register_action(rename_vars_action)   ||
+        !register_action(about_action)         ||
+        !register_action(gemini_25_pro_action) ||
+        !register_action(deepseek_chat_action) ||
+        !register_action(gpt_5_action)         ||
+        !register_action(gemini_api_action)    ||
+        !register_action(deepseek_api_action)  ||
+        !register_action(openai_api_action)) {
 
         LogMessage(LOG_PATH, true, "[BinaryLens] ERROR: Failed to register actions.\n");
         return PLUGIN_SKIP;

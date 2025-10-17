@@ -11,7 +11,14 @@ bool WriteRegistryData(const char* sub_key, const char* value_name, const char* 
 bool SaveFileContent(const std::string& filepath, const std::string& content);
 std::string GetFileContent(const std::string& filepath);
 std::string WrapText(const std::string& text, size_t max_line_length);
-std::string GetResponseFromModel(std::string model, std::string api_key, std::string system_prompt, std::string user_prompt);
+
+std::string GetResponseFromModel(
+	std::string model,
+	std::string api_key,
+	std::string system_prompt,
+	std::string user_prompt
+);
+
 void RemoveSubstring(std::string& str, const std::string& target);
 bool ContainsSubstring(const std::string& str, const std::string& target);
 void TrimStr(std::string& s);

@@ -20,7 +20,12 @@
 
 #pragma comment(lib, "Advapi32.lib")
 
-std::string GetResponseFromModel(std::string model, std::string api_key, std::string system_prompt, std::string user_prompt) {
+std::string GetResponseFromModel(
+    std::string model,
+    std::string api_key,
+    std::string system_prompt,
+    std::string user_prompt
+) {
     std::string host;
     std::string chat_endpoint;
     int max_token_len;
@@ -60,7 +65,9 @@ std::string GetResponseFromModel(std::string model, std::string api_key, std::st
     ThreadLogMessage(LOG_PATH, 0, "Estimated token length of the request: %d\n", estimated_token_len);
 
     if (estimated_token_len > max_token_len) {
-        ThreadLogMessage(LOG_PATH, 3, "The given request is too large for the selected model (%s). Please choose a smaller binary or function.\n", model.c_str());
+        ThreadLogMessage(LOG_PATH, 3, "The given request is too large for the selected model (%s). "
+            "Please choose a smaller binary or function.\n", model.c_str()
+        );
         return std::string();
     }
 
@@ -77,18 +84,20 @@ std::string GetResponseFromModel(std::string model, std::string api_key, std::st
 
     ThreadLogMessage(LOG_PATH, 0, "Default headers set\n");
 
-	auto dumpped_body = body.dump();
+    auto dumpped_body = body.dump();
 
-	ThreadLogMessage(LOG_PATH, 0, "Body dumped successfully\n");
+    ThreadLogMessage(LOG_PATH, 0, "Body dumped successfully\n");
 
     auto res = cli.Post(chat_endpoint, dumpped_body, "application/json");
 
     ThreadLogMessage(LOG_PATH, 0, "Request sent to endpoint: %s\n", chat_endpoint.c_str());
 
     if (!res) {
-        ThreadLogMessage(LOG_PATH, 3, "Failed to get a response from the model. Please check your internet connection and try again later.\n");
+        ThreadLogMessage(LOG_PATH, 3, "Failed to get a response from the model. "
+            "Please check your internet connection and try again later.\n"
+        );
         return std::string();
-	}
+    }
 
     if (res->status != 200) {
         // Try to parse the error message from the response
@@ -102,11 +111,15 @@ std::string GetResponseFromModel(std::string model, std::string api_key, std::st
             else
                 error_message = error_data["error"]["message"];
 
-            ThreadLogMessage(LOG_PATH, 3, "Request to (%s) rejected, with error:\n\n%s\n", model.c_str(), error_message.c_str());
+            ThreadLogMessage(LOG_PATH, 3, "Request to (%s) rejected, with error:"
+                "\n\n%s\n", model.c_str(), error_message.c_str()
+            );
         }
         catch (const std::exception& e) {
             // If parsing fails, just print the status code
-            ThreadLogMessage(LOG_PATH, 3, "Failed to get a response from the model. Please try again later. Failed with status (%d).\n", res->status);
+            ThreadLogMessage(LOG_PATH, 3, "Failed to get a response from the model. "
+                "Please try again later. Failed with status (%d).\n", res->status
+            );
             ThreadLogMessage(LOG_PATH, 0, "Response JSON:\n%s\n", error_data.dump(4).c_str());
         }
         return std::string();
@@ -120,9 +133,11 @@ std::string GetResponseFromModel(std::string model, std::string api_key, std::st
         model_response = data["choices"][0]["message"]["content"];
     }
     catch (const std::exception& e) {
-        ThreadLogMessage(LOG_PATH, 3, "Failed to get a response from the model. Model request was rejected unexpectedly. Please try again later.\n");
+        ThreadLogMessage(LOG_PATH, 3, "Failed to get a response from the model. "
+            "Model request was rejected unexpectedly. Please try again later.\n"
+        );
         ThreadLogMessage(LOG_PATH, 0, "Response JSON:\n%s\n", data.dump(4).c_str());
-		return std::string();
+        return std::string();
     }
 
     return model_response;
@@ -214,7 +229,7 @@ bool ThreadLogMessage(const char* path, int display_type, const char* format, ..
 
     LogMsgInMain LogMsgInMain;
     LogMsgInMain.display_type = display_type;
-	LogMsgInMain.msg = buf;
+    LogMsgInMain.msg = buf;
 
     execute_sync(LogMsgInMain, MFF_WRITE);
 
@@ -224,12 +239,29 @@ bool ThreadLogMessage(const char* path, int display_type, const char* format, ..
 bool WriteRegistryData(const char* sub_key, const char* value_name, const char* data_to_write) {
     HKEY hKey;
 
-    if (RegCreateKeyExA(HKEY_CURRENT_USER, sub_key, 0, nullptr, REG_OPTION_NON_VOLATILE, KEY_ALL_ACCESS, nullptr, &hKey, nullptr) != ERROR_SUCCESS) {
+    if (RegCreateKeyExA(
+        HKEY_CURRENT_USER,
+        sub_key,
+        0,
+        nullptr,
+        REG_OPTION_NON_VOLATILE,
+        KEY_ALL_ACCESS,
+        nullptr,
+        &hKey,
+        nullptr
+    ) != ERROR_SUCCESS) {
         LogMessage(LOG_PATH, 3, "Failed to create or open registry key. Error code: %ld\n", GetLastError());
         return false;
     }
 
-    if (RegSetValueExA(hKey, value_name, 0, REG_SZ, reinterpret_cast<const BYTE*>(data_to_write), strlen(data_to_write) + 1) != ERROR_SUCCESS) {
+    if (RegSetValueExA(
+        hKey,
+        value_name,
+        0,
+        REG_SZ,
+        reinterpret_cast<const BYTE*>(data_to_write),
+        strlen(data_to_write) + 1
+    ) != ERROR_SUCCESS) {
         LogMessage(LOG_PATH, 3, "Failed to write data to registry. Error code: %ld\n", GetLastError());
         return false;
     }
@@ -241,7 +273,17 @@ bool WriteRegistryData(const char* sub_key, const char* value_name, const char* 
 bool ReadRegistryData(const char* sub_key, const char* value_name, std::string& read_data) {
     HKEY hKey;
 
-    if (RegCreateKeyExA(HKEY_CURRENT_USER, sub_key, 0, nullptr, REG_OPTION_NON_VOLATILE, KEY_ALL_ACCESS, nullptr, &hKey, nullptr) != ERROR_SUCCESS) {
+    if (RegCreateKeyExA(
+        HKEY_CURRENT_USER,
+        sub_key,
+        0,
+        nullptr,
+        REG_OPTION_NON_VOLATILE,
+        KEY_ALL_ACCESS,
+        nullptr,
+        &hKey,
+        nullptr
+    ) != ERROR_SUCCESS) {
         ThreadLogMessage(LOG_PATH, 3, "ERROR: Failed to create or open registry key. Error code: %ld\n", GetLastError());
         return false;
     }
