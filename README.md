@@ -40,5 +40,5 @@ We have tested many models, but only the currently supported ones passed our che
 The models cannot accurately rename functions without analyzing the entire binary at once.
 
 ## TODO
-1. Compress decompiled subroutines before sending (remove local variable definitions, etc.).  
+1. We already slightly compress the functions before sending, but better compression methods could be added.
 2. Allow interactive chat with the model on a selected function.
