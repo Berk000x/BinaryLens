@@ -33,10 +33,10 @@ Tested on Windows 10/11 with IDA 9.1 Pro. Mainly tested on x86 binaries but shou
 You need to link **OpenSSL** and **IDA’s SDK** in Visual Studio’s project settings. The necessary paths are already included, you just need to replace them with your own paths. Also make sure to compile the project in x64.
 
 ## FAQ
-### Why not add more model options?
+#### Why not add more model options?
 We have tested many models, but only the currently supported ones passed our checks. Adding new models is simple, but not recommended.
 
-### Why not send the decompiled functions chunk by chunk?
+#### Why not send the decompiled functions chunk by chunk?
 The models cannot accurately rename functions without analyzing the entire binary at once.
 
 ## TODO
