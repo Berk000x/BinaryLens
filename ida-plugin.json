@@ -3,7 +3,9 @@
   "plugin": {
     "name": "BinaryLens",
     "categories": ["api-scripting-and-automation", "collaboration-and-productivity", "malware-analysis"],
+    "logoPath": "",
     "description": "An IDA plugin that uses language models to speed up binary analysis.",
+    "idaVersions": "",
     "version": "1.0.1"
   }
 }
