@@ -5,7 +5,7 @@
     "categories": ["api-scripting-and-automation", "collaboration-and-productivity", "malware-analysis"],
     "logoPath": "",
     "description": "An IDA plugin that uses language models to speed up binary analysis.",
-    "idaVersions": "",
+    "idaVersions": "Tested on 9.1",
     "version": "1.0.1"
   }
 }
