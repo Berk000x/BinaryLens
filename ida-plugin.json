@@ -1,0 +1,9 @@
+{
+  "IDAMetadataDescriptorVersion": 1,
+  "plugin": {
+    "name": "BinaryLens",
+    "categories": ["api-scripting-and-automation", "collaboration-and-productivity", "malware-analysis"],
+    "description": "An IDA plugin that uses language models to speed up binary analysis.",
+    "version": "1.0.1"
+  }
+}
