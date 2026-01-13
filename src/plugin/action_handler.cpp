@@ -1,10 +1,9 @@
 #include <fstream>
-#include <windows.h>
 #include <thread>
-#include <shlwapi.h>
 #include <string>
 #include <iostream>
 #include <sstream>
+#include <cstring>
 
 #include "../helper/httplib.h"
 #include "../helper/helper.h"
@@ -19,18 +18,32 @@
 #include <name.hpp>
 #include <hexrays.hpp>
 
+#if defined(_WIN32)
+#include <windows.h>
+#endif
+
 TWidget* widget;
 
 bool HandleAnalysisActions(const char* action_name) {
+    ThreadLogMessage(LOG_PATH, 0, "[DEBUG] HandleAnalysisActions called with action: %s\n", action_name);
+    
     if (strcmp(action_name, "rename_subs") == 0) {
+        ThreadLogMessage(LOG_PATH, 0, "[DEBUG] rename_subs action triggered, sub_rename_end = %s\n", 
+                        sub_rename_end ? "true" : "false");
         if (sub_rename_end) {
             RenameAllSubs();
+        } else {
+            ThreadLogMessage(LOG_PATH, 0, "[DEBUG] Subroutine renaming already in progress, skipping...\n");
         }
     }
 
     if (strcmp(action_name, "rename_vars") == 0) {
+        ThreadLogMessage(LOG_PATH, 0, "[DEBUG] rename_vars action triggered, var_rename_end = %s\n", 
+                        var_rename_end ? "true" : "false");
         if (var_rename_end) {
             RenameVariables(widget);
+        } else {
+            ThreadLogMessage(LOG_PATH, 0, "[DEBUG] Variable renaming already in progress, skipping...\n");
         }
     }
 
@@ -190,8 +203,10 @@ ssize_t idaapi WidgetPopupCallback(void* user_data, int notification_code, va_li
 }
 
 plugmod_t* idaapi init() {
+    #if defined(_WIN32)
     SetConsoleOutputCP(CP_UTF8);
-    DeleteFileA("BinaryLensLog.txt");
+    #endif
+    RemoveFile("BinaryLensLog.txt");
 
     if (!register_action(rename_subs_action)   ||
         !register_action(rename_vars_action)   ||
