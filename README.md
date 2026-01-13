@@ -50,8 +50,9 @@ You need to link **OpenSSL** and **IDA’s SDK** in Visual Studio’s project se
 5. Copy `build/bin/BinaryLens.dll` into IDA’s `plugins` directory and keep the required OpenSSL DLLs next to `ida.exe` as described above.
 
 ## macOS
-An experimental macOS build path now exists. Set `-DBINARYLENS_EXPERIMENTAL_MACOS=ON` when configuring CMake and point `IDA_SDK_ROOT` to your macOS IDA SDK. The source now uses a file-based config under `~/.config/BinaryLens/config.json` instead of the Windows registry and avoids Win32-only timing/temp APIs. Remaining gaps: the UI and IDA SDK interactions have been tested primarily on Windows; please treat macOS as experimental.
+An experimental macOS build path now exists. Point `IDA_SDK_ROOT` to your macOS IDA SDK. The source now uses a file-based config under `~/.config/BinaryLens/config.json` instead of the Windows registry and avoids Win32-only timing/temp APIs. Remaining gaps: the UI and IDA SDK interactions have been tested primarily on Windows; please treat macOS as experimental.
 
+Compile: `cmake .. -DOPENSSL_ROOT_DIR=/opt/homebrew/opt/openssl@3 || cmake ..`
 ## FAQ
 #### Why not add more model options?
 We have tested many models, but only the currently supported ones passed our checks. Adding new models is simple, but not recommended.
