@@ -23,19 +23,19 @@ if(APPLE AND NOT BINARYLENS_EXPERIMENTAL_MACOS)
   message(FATAL_ERROR "BinaryLens currently uses Win32 APIs (registry, windows.h). Enable BINARYLENS_EXPERIMENTAL_MACOS=ON only if you plan to port the code for macOS.")
 endif()
 
-if(NOT (WIN32 OR APPLE))
+if(NOT (WIN32 OR APPLE OR UNIX))
   message(FATAL_ERROR "Unsupported platform. Build on Windows or set BINARYLENS_EXPERIMENTAL_MACOS=ON for macOS porting work.")
 endif()
 
-set(IDA_SDK_ROOT "" CACHE PATH "Path to the IDA SDK root containing include/ and platform-specific lib directory")
+#set(IDA_SDK_ROOT "" CACHE PATH "Path to the IDA SDK root containing include/ and platform-specific lib directory")
 set(OPENSSL_ROOT_DIR "" CACHE PATH "Root of your OpenSSL install (forwarded to find_package(OpenSSL))")
-
+set(IDA_SDK_ROOT "./ida-sdk/" CACHE PATH "Path to the IDA SDK root containing include/ and src/lib")
 if(NOT IDA_SDK_ROOT)
   message(FATAL_ERROR "Set IDA_SDK_ROOT to your IDA SDK path (e.g. C:/idasdk91/idasdk91 or /Applications/IDA/sdk).")
 endif()
 
 find_path(IDA_SDK_INCLUDE_DIR ida.hpp
-  PATHS 
+  PATHS
     "${IDA_SDK_ROOT}/include"
     "${IDA_SDK_ROOT}/src/include"
   NO_DEFAULT_PATH
@@ -48,10 +48,12 @@ if(WIN32)
   # Windows IDA SDK layout
   find_library(IDA_SDK_LIBRARY
     NAMES ida
-    PATHS "${IDA_SDK_ROOT}/lib/x64_win_vc_64"
+    PATHS
+      "${IDA_SDK_ROOT}/lib/x64_win_vc_64"
+      "${IDA_SDK_ROOT}/src/lib/x64_win_vc_64"
     NO_DEFAULT_PATH
   )
-else()
+elseif(APPLE)
   # macOS IDA SDK - detect architecture and use appropriate library path
   if(CMAKE_SYSTEM_PROCESSOR MATCHES "arm64|aarch64" OR CMAKE_OSX_ARCHITECTURES MATCHES "arm64")
     # Apple Silicon (M1/M2/M3)
@@ -76,6 +78,18 @@ else()
     )
     message(STATUS "Using x64 macOS IDA SDK library path")
   endif()
+elseif(UNIX)
+  # Linux IDA SDK layout
+  find_library(IDA_SDK_LIBRARY
+    NAMES ida ida64 libida64 libida
+    PATHS
+      "${IDA_SDK_ROOT}/src/lib/x64_linux_gcc_64"
+      "${IDA_SDK_ROOT}/lib/x64_linux_gcc_64"
+      "${IDA_SDK_ROOT}/src/lib"
+      "${IDA_SDK_ROOT}/lib"
+    NO_DEFAULT_PATH
+  )
+  message(STATUS "Using Linux IDA SDK library path")
 endif()
 
 if(NOT IDA_SDK_LIBRARY)
@@ -85,6 +99,7 @@ endif()
 # Prefer dynamic OpenSSL (matches the original project). Pass OPENSSL_ROOT_DIR if needed.
 set(OPENSSL_USE_STATIC_LIBS OFF)
 find_package(OpenSSL REQUIRED)
+find_package(Threads REQUIRED)
 
 set(SRC_DIR ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
@@ -153,23 +168,32 @@ elseif(APPLE)
       OpenSSL::SSL
       OpenSSL::Crypto
   )
-  
+
   # Ensure proper ARM64 compilation flags for Apple Silicon
   if(CMAKE_SYSTEM_PROCESSOR MATCHES "arm64|aarch64")
     # Set deployment target to match system and library requirements
     set(CMAKE_OSX_DEPLOYMENT_TARGET "26.0" CACHE STRING "Minimum macOS deployment version" FORCE)
-    
-    target_compile_options(BinaryLens PRIVATE 
-      -arch arm64 
+
+    target_compile_options(BinaryLens PRIVATE
+      -arch arm64
       -stdlib=libc++
     )
-    target_link_options(BinaryLens PRIVATE 
-      -arch arm64 
+    target_link_options(BinaryLens PRIVATE
+      -arch arm64
       -stdlib=libc++
       -L/opt/homebrew/opt/llvm/lib/c++
       -rpath /opt/homebrew/opt/llvm/lib/c++
     )
   endif()
+elseif(UNIX)
+  target_link_libraries(BinaryLens
+    PRIVATE
+      ${IDA_SDK_LIBRARY}
+      OpenSSL::SSL
+      OpenSSL::Crypto
+      Threads::Threads
+      dl
+  )
 endif()
 
 set_target_properties(BinaryLens PROPERTIES

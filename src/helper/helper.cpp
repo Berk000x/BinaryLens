@@ -1,4 +1,4 @@
-// IDA SDK headers first to establish their environment  
+// IDA SDK headers first to establish their environment
 #include "../../ida-sdk/src/include/pro.h"
 #include "../../ida-sdk/src/include/ida.hpp"
 #include "../../ida-sdk/src/include/idp.hpp"
@@ -18,6 +18,7 @@
 #include <vector>
 #include <string>
 #include <exception>
+#include <memory>
 #endif
 
 // Temporarily undefine IDA SDK macros that conflict with third-party libraries
@@ -25,7 +26,7 @@
 #undef snprintf
 #endif
 #ifdef wait
-#undef wait  
+#undef wait
 #endif
 #ifdef fgetc
 #undef fgetc
@@ -78,7 +79,7 @@ qstring GetConfigPath() {
     if (qgetenv("HOME", &home)) {
         config_path = home;
         config_path += "/.config/BinaryLens";
-        
+
         // Ensure directory exists using IDA SDK compatible method
 #ifdef __APPLE__
         qmkdir(config_path.c_str(), 0755);
@@ -105,10 +106,13 @@ qstring GetResponseFromModel(
     ThreadLogMessage(LOG_PATH, 0, "API Key length: %d\n", static_cast<int>(api_key.length()));
     ThreadLogMessage(LOG_PATH, 0, "System prompt length: %d\n", static_cast<int>(system_prompt.length()));
     ThreadLogMessage(LOG_PATH, 0, "User prompt length: %d\n", static_cast<int>(user_prompt.length()));
-    
+
     qstring host;
     qstring chat_endpoint;
     int max_token_len;
+    bool use_tls = false;
+    int port = 1234;
+    bool allow_empty_api_key = false;
 
     nlohmann::json body = {
         {"model", model.c_str()},
@@ -135,9 +139,12 @@ qstring GetResponseFromModel(
         body["max_tokens"] = 8192;
     }
     else if (model.find("gpt") != BADADDR) {
-        host = "api.openai.com";
+        host = "localhost";
         chat_endpoint = "/v1/chat/completions";
-        max_token_len = 270000;
+        max_token_len = 131072;
+        use_tls = false;
+        allow_empty_api_key = true;
+        port = 1234;
     }
     else {
         ThreadLogMessage(LOG_PATH, 3, "Unsupported model: %s\n", model.c_str());
@@ -146,6 +153,33 @@ qstring GetResponseFromModel(
 
     ThreadLogMessage(LOG_PATH, 0, "Using host: %s, endpoint: %s\n", host.c_str(), chat_endpoint.c_str());
 
+    // Normalize host/scheme/port for HTTP client
+    std::string host_str = host.c_str();
+    if (host_str.rfind("http://", 0) == 0) {
+        use_tls = false;
+        host_str = host_str.substr(7);
+    } else if (host_str.rfind("https://", 0) == 0) {
+        use_tls = true;
+        host_str = host_str.substr(8);
+    }
+
+    std::string host_only = host_str;
+    const auto colon_pos = host_str.find(':');
+    if (colon_pos != std::string::npos) {
+        host_only = host_str.substr(0, colon_pos);
+        const auto port_str = host_str.substr(colon_pos + 1);
+        if (!port_str.empty()) {
+            const int parsed_port = std::atoi(port_str.c_str());
+            if (parsed_port > 0) {
+                port = parsed_port;
+            }
+        }
+    }
+
+    if (!use_tls && port == 443) {
+        port = 80;
+    }
+
     // Validate API key presence for selected provider
     if (model.find("gemini") != BADADDR) {
         if (api_key.length() == 0) {
@@ -153,7 +187,7 @@ qstring GetResponseFromModel(
             return qstring();
         }
     } else {
-        if (api_key.length() == 0) {
+        if (api_key.length() == 0 && !allow_empty_api_key) {
             ThreadLogMessage(LOG_PATH, 3, "API key not provided. Please set the API key for the selected provider.\n");
             return qstring();
         }
@@ -176,119 +210,135 @@ qstring GetResponseFromModel(
         return qstring();
     }
 
-    ThreadLogMessage(LOG_PATH, 0, "Creating HTTPS client...\n");
-    ThreadLogMessage(LOG_PATH, 0, "Host URL: %s\n", host.c_str());
-    
-    // Detect CA bundle and configure SSL paths
-    std::vector<std::string> ca_candidates = {
-        "/opt/homebrew/etc/openssl@3/cert.pem",
-        "/opt/homebrew/etc/openssl/cert.pem",
-        "/usr/local/etc/openssl/cert.pem",
-        "/opt/local/etc/openssl3/cert.pem",
-        "/opt/local/libexec/openssl3/cert.pem",
-        "/etc/ssl/certs/ca-certificates.crt",
-        "/etc/ssl/certs/ca-bundle.crt",
-        "/etc/ssl/cert.pem"
-    };
+    ThreadLogMessage(LOG_PATH, 0, "Creating client...\n");
+    ThreadLogMessage(LOG_PATH, 0, "Host URL: %s (port %d, tls=%s)\n", host_only.c_str(), port, use_tls ? "true" : "false");
+
+    std::unique_ptr<httplib::Client> http_cli;
+#if defined(CPPHTTPLIB_OPENSSL_SUPPORT)
+    std::unique_ptr<httplib::SSLClient> https_cli;
+#endif
 
     std::string found_ca;
-    struct stat st;
-    for (const auto &p : ca_candidates) {
-        if (stat(p.c_str(), &st) == 0) {
-            found_ca = p;
-            break;
+    if (use_tls) {
+        // Detect CA bundle and configure SSL paths
+        std::vector<std::string> ca_candidates = {
+            "/opt/homebrew/etc/openssl@3/cert.pem",
+            "/opt/homebrew/etc/openssl/cert.pem",
+            "/usr/local/etc/openssl/cert.pem",
+            "/opt/local/etc/openssl3/cert.pem",
+            "/opt/local/libexec/openssl3/cert.pem",
+            "/etc/ssl/certs/ca-certificates.crt",
+            "/etc/ssl/certs/ca-bundle.crt",
+            "/etc/ssl/cert.pem"
+        };
+
+        struct stat st;
+        for (const auto &p : ca_candidates) {
+            if (stat(p.c_str(), &st) == 0) {
+                found_ca = p;
+                break;
+            }
+        }
+
+        if (!found_ca.empty()) {
+            qsetenv("SSL_CERT_FILE", found_ca.c_str());
+            qsetenv("CURL_CA_BUNDLE", found_ca.c_str());
+            ThreadLogMessage(LOG_PATH, 0, "Using CA bundle: %s\n", found_ca.c_str());
+        } else {
+            // Fallback values (may work on some setups)
+            qsetenv("SSL_CERT_FILE", "/usr/local/etc/openssl/cert.pem");
+            qsetenv("SSL_CERT_DIR", "/System/Library/OpenSSL");
+            qsetenv("CURL_CA_BUNDLE", "/usr/local/etc/openssl/cert.pem");
+            ThreadLogMessage(LOG_PATH, 3, "[WARNING] No CA bundle found in common locations; HTTPS may fail.\n");
         }
     }
 
-    if (!found_ca.empty()) {
-        qsetenv("SSL_CERT_FILE", found_ca.c_str());
-        qsetenv("CURL_CA_BUNDLE", found_ca.c_str());
-        ThreadLogMessage(LOG_PATH, 0, "Using CA bundle: %s\n", found_ca.c_str());
-    } else {
-        // Fallback values (may work on some setups)
-        qsetenv("SSL_CERT_FILE", "/usr/local/etc/openssl/cert.pem");
-        qsetenv("SSL_CERT_DIR", "/System/Library/OpenSSL");
-        qsetenv("CURL_CA_BUNDLE", "/usr/local/etc/openssl/cert.pem");
-        ThreadLogMessage(LOG_PATH, 3, "[WARNING] No CA bundle found in common locations; HTTPS may fail.\n");
-    }
-
-#if defined(CPPHTTPLIB_OPENSSL_SUPPORT)
-    httplib::SSLClient cli(host.c_str(), 443);
-    if (!found_ca.empty()) {
-        cli.set_ca_cert_path(found_ca, std::string());
-    }
-    cli.enable_server_certificate_verification(true);
-    cli.enable_server_hostname_verification(true);
-    if (!cli.is_valid()) {
-        ThreadLogMessage(LOG_PATH, 3, "[SSL DEBUG] SSLClient created but invalid (no SSL context)\n");
-    } else {
-        long init_vr = cli.get_openssl_verify_result();
-        ThreadLogMessage(LOG_PATH, 0, "[SSL DEBUG] Initial OpenSSL verify result: %ld\n", init_vr);
-    }
-#else
-    httplib::Client cli(host.c_str());
-    ThreadLogMessage(LOG_PATH, 3, "[WARNING] httplib built without OpenSSL support; HTTPS may fail.\n");
-#endif
-    
-    // Configure timeouts
-    cli.set_read_timeout(1200, 0);
-    cli.set_write_timeout(600, 0);
-    cli.set_connection_timeout(60, 0);  // Add connection timeout
-    
-    ThreadLogMessage(LOG_PATH, 0, "Client created and SSL paths configured for host: %s\n", host.c_str());
-
-    // Set authentication based on provider
+    // Build headers
+    httplib::Headers headers;
     if (model.find("gemini") != BADADDR) {
-        // Some Gemini endpoints accept API key as URL param, but some require
-        // an Authorization or x-goog-api-key header. Send both to be compatible.
         qstring auth_header = "Bearer ";
         auth_header += api_key;
-        cli.set_default_headers({
+        headers = {
             {"Content-Type", "application/json"},
             {"x-goog-api-key", api_key.c_str()},
             {"Authorization", auth_header.c_str()}
-        });
+        };
         ThreadLogMessage(LOG_PATH, 0, "Headers set for Gemini (URL key + x-goog-api-key + Authorization)\n");
     } else {
-        // Other providers use Bearer token in Authorization header
-        if (api_key.length() == 0) {
+        if (api_key.length() == 0 && !allow_empty_api_key) {
             ThreadLogMessage(LOG_PATH, 3, "API key is empty; cannot set Authorization header.\n");
             return qstring();
         }
-        qstring auth_header = "Bearer ";
-        auth_header += api_key;
-        cli.set_default_headers({
-            {"Authorization", auth_header.c_str()},
-            {"Content-Type", "application/json"}
-        });
-        ThreadLogMessage(LOG_PATH, 0, "Headers set with Bearer token\n");
+        if (api_key.length() > 0) {
+            qstring auth_header = "Bearer ";
+            auth_header += api_key;
+            headers = {
+                {"Authorization", auth_header.c_str()},
+                {"Content-Type", "application/json"}
+            };
+            ThreadLogMessage(LOG_PATH, 0, "Headers set with Bearer token\n");
+        } else {
+            headers = {
+                {"Content-Type", "application/json"}
+            };
+            ThreadLogMessage(LOG_PATH, 0, "Headers set without Authorization (local endpoint)\n");
+        }
     }
 
     auto dumpped_body = body.dump();
     ThreadLogMessage(LOG_PATH, 0, "Request body size: %d bytes\n", static_cast<int>(dumpped_body.length()));
-
     ThreadLogMessage(LOG_PATH, 0, "Body dumped successfully\n");
-
     ThreadLogMessage(LOG_PATH, 0, "Sending POST request...\n");
-    ThreadLogMessage(LOG_PATH, 0, "[DEBUG] Full URL: https://%s%s\n", host.c_str(), chat_endpoint.c_str());
+    ThreadLogMessage(LOG_PATH, 0, "[DEBUG] Full URL: %s://%s:%d%s\n", use_tls ? "https" : "http", host_only.c_str(), port, chat_endpoint.c_str());
     ThreadLogMessage(LOG_PATH, 0, "[DEBUG] Request body preview: %.200s...\n", dumpped_body.c_str());
-    
-    auto res = cli.Post(chat_endpoint.c_str(), dumpped_body, "application/json");
 
+    httplib::Result res;
+    if (use_tls) {
+#if defined(CPPHTTPLIB_OPENSSL_SUPPORT)
+        https_cli = std::make_unique<httplib::SSLClient>(host_only.c_str(), port);
+        if (!found_ca.empty()) {
+            https_cli->set_ca_cert_path(found_ca, std::string());
+        }
+        https_cli->enable_server_certificate_verification(true);
+        https_cli->enable_server_hostname_verification(true);
+        https_cli->set_read_timeout(1200, 0);
+        https_cli->set_write_timeout(600, 0);
+        https_cli->set_connection_timeout(60, 0);
+        if (!https_cli->is_valid()) {
+            ThreadLogMessage(LOG_PATH, 3, "[SSL DEBUG] SSLClient created but invalid (no SSL context)\n");
+        } else {
+            long init_vr = https_cli->get_openssl_verify_result();
+            ThreadLogMessage(LOG_PATH, 0, "[SSL DEBUG] Initial OpenSSL verify result: %ld\n", init_vr);
+        }
+        res = https_cli->Post(chat_endpoint.c_str(), headers, dumpped_body, "application/json");
+#else
+        ThreadLogMessage(LOG_PATH, 3, "[ERROR] HTTPS requested but httplib built without OpenSSL support.\n");
+        return qstring();
+#endif
+    } else {
+        http_cli = std::make_unique<httplib::Client>(host_only.c_str(), port);
+        http_cli->set_read_timeout(1200, 0);
+        http_cli->set_write_timeout(600, 0);
+        http_cli->set_connection_timeout(60, 0);
+        res = http_cli->Post(chat_endpoint.c_str(), headers, dumpped_body, "application/json");
+    }
+
+    ThreadLogMessage(LOG_PATH, 0, "Client created and SSL paths configured for host: %s\n", host.c_str());
     ThreadLogMessage(LOG_PATH, 0, "Request completed\n");
 
     if (!res) {
         ThreadLogMessage(LOG_PATH, 3, "[ERROR] HTTP request returned null response\n");
-        ThreadLogMessage(LOG_PATH, 3, "[ERROR] This usually indicates SSL/TLS handshake failure\n");
+        ThreadLogMessage(LOG_PATH, 3, "[ERROR] This usually indicates a connection or SSL/TLS failure\n");
         ThreadLogMessage(LOG_PATH, 3, "Failed to get a response from the model. "
             "Please check your internet connection and SSL configuration. "
             "Try again later.\n"
         );
-        // Additional OpenSSL verification debug info
 #if defined(CPPHTTPLIB_OPENSSL_SUPPORT)
-        long vr = cli.get_openssl_verify_result();
-        const char* vr_str = X509_verify_cert_error_string((int)vr);
-        ThreadLogMessage(LOG_PATH, 3, "[SSL DEBUG] OpenSSL verify result after failure: %ld (%s)\n", vr, vr_str ? vr_str : "<null>");
+        if (https_cli) {
+            long vr = https_cli->get_openssl_verify_result();
+            const char* vr_str = X509_verify_cert_error_string((int)vr);
+            ThreadLogMessage(LOG_PATH, 3, "[SSL DEBUG] OpenSSL verify result after failure: %ld (%s)\n", vr, vr_str ? vr_str : "<null>");
+        }
 #endif
         return qstring();
     }
@@ -485,7 +535,7 @@ bool WriteRegistryData(const char* sub_key, const char* value_name, const char* 
         qfseek(in_file, 0, SEEK_END);
         int64 size = qftell(in_file);
         qfseek(in_file, 0, SEEK_SET);
-        
+
         char* content = (char*)qalloc(size + 1);
         if (content) {
             qfread(in_file, content, size);
@@ -521,7 +571,7 @@ bool WriteRegistryData(const char* sub_key, const char* value_name, const char* 
 
 bool ReadRegistryData(const char* sub_key, const char* value_name, std::string& read_data) {
     ThreadLogMessage(LOG_PATH, 0, "[DEBUG] Reading config for key: %s, value: %s\n", sub_key, value_name);
-    
+
 #if defined(_WIN32)
     HKEY hKey;
 
@@ -555,7 +605,7 @@ bool ReadRegistryData(const char* sub_key, const char* value_name, std::string& 
 
     const auto cfg_path = GetConfigPath();
     ThreadLogMessage(LOG_PATH, 0, "[DEBUG] Config file path: %s\n", cfg_path.c_str());
-    
+
     auto in_file = qfopen(cfg_path.c_str(), "r");
     if (!in_file) {
         ThreadLogMessage(LOG_PATH, 0, "[DEBUG] Config file not found: %s\n", cfg_path.c_str());
@@ -565,17 +615,17 @@ bool ReadRegistryData(const char* sub_key, const char* value_name, std::string& 
     qfseek(in_file, 0, SEEK_END);
     int64 size = qftell(in_file);
     qfseek(in_file, 0, SEEK_SET);
-    
+
     char* content = (char*)qalloc(size + 1);
     if (!content) {
         qfclose(in_file);
         return false;
     }
-    
+
     qfread(in_file, content, size);
     content[size] = 0;
     qfclose(in_file);
-    
+
     nlohmann::json j;
     try {
         j = nlohmann::json::parse(content);
@@ -584,7 +634,7 @@ bool ReadRegistryData(const char* sub_key, const char* value_name, std::string& 
         return false;
     }
     qfree(content);
-    
+
     if (!j.contains(value_name))
         return false;
 
@@ -723,13 +773,13 @@ bool CreateTempFile(qstring& out_path, const char* prefix) {
 
     std::error_code ec;
     std::filesystem::create_directories(full.parent_path(), ec);
-    
+
     // Create temp file
     auto touch = qfopen(full.string().c_str(), "w");
     if (touch) {
         qfclose(touch);
     }
-    
+
     if (!std::filesystem::exists(full)) {
         LogMessage(LOG_PATH, 3, "ERROR: Failed to create temp file: %s\n", full.string().c_str());
         return false;
