@@ -1,11 +1,16 @@
-﻿#include <windows.h>
-#include <iostream>
+﻿#include <iostream>
 
 #include "plugin/action_handler.h"
 
 #include <hexrays.hpp>
 
-__declspec(dllexport) plugin_t PLUGIN = {
+#if defined(_WIN32)
+#define BINARYLENS_EXPORT __declspec(dllexport)
+#else
+#define BINARYLENS_EXPORT __attribute__((visibility("default")))
+#endif
+
+BINARYLENS_EXPORT plugin_t PLUGIN = {
     IDP_INTERFACE_VERSION,
     PLUGIN_PROC,
     init,

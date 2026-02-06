@@ -1,5 +1,7 @@
-#include <windows.h>
+#pragma once
+
 #include <iostream>
+#include <string>
 
 #include <ida.hpp>
 #include <kernwin.hpp> 

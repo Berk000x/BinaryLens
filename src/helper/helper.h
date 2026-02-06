@@ -1,22 +1,33 @@
-#include <windows.h>
-#include <iostream>
+#pragma once
 
-#define REACTION_TIME(stop, start, freq) ((double)((stop).QuadPart - (start).QuadPart) / (freq).QuadPart)
+#ifndef __cplusplus
+#error "This header requires C++"
+#endif
+
+// Forward declare qstring to avoid circular includes
+template<class T> class _qstring;
+using qstring = _qstring<char>;
+
+#include <string>
+#include <cstddef>
+
 #define LOG_PATH "BinaryLensLog.txt"
 
 bool LogMessage(const char* path, int display_type, const char* format, ...);
 bool ThreadLogMessage(const char* path, int display_type, const char* format, ...);
 bool ReadRegistryData(const char* sub_key, const char* value_name, std::string& read_data);
 bool WriteRegistryData(const char* sub_key, const char* value_name, const char* data_to_write);
-bool SaveFileContent(const std::string& filepath, const std::string& content);
-std::string GetFileContent(const std::string& filepath);
+bool CreateTempFile(qstring& out_path, const char* prefix);
+void RemoveFile(const std::string& path);
+bool SaveFileContent(const qstring& filepath, const qstring& content);
+qstring GetFileContent(const qstring& filepath);
 std::string WrapText(const std::string& text, size_t max_line_length);
 
-std::string GetResponseFromModel(
-	std::string model,
-	std::string api_key,
-	std::string system_prompt,
-	std::string user_prompt
+qstring GetResponseFromModel(
+	const qstring& model,
+	const qstring& api_key,
+	const qstring& system_prompt,
+	const qstring& user_prompt
 );
 
 void RemoveSubstring(std::string& str, const std::string& target);

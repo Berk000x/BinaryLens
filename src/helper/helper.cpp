@@ -1,49 +1,136 @@
-#include <fstream>
-#include <windows.h>
-#include <thread>
-#include <shlwapi.h>
-#include <string>
-#include <iostream>
-#include <sstream>
+// IDA SDK headers first to establish their environment
+#include "../../ida-sdk/src/include/pro.h"
+#include "../../ida-sdk/src/include/ida.hpp"
+#include "../../ida-sdk/src/include/idp.hpp"
+#include "../../ida-sdk/src/include/loader.hpp"
+#include "../../ida-sdk/src/include/kernwin.hpp"
+#include "../../ida-sdk/src/include/funcs.hpp"
+#include "../../ida-sdk/src/include/name.hpp"
+#include "../../ida-sdk/src/include/hexrays.hpp"
+#include "../../ida-sdk/src/include/fpro.h"
 
+// Standard library with explicit std:: usage after IDA headers
+#ifdef __cplusplus
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <filesystem>
+#include <vector>
+#include <string>
+#include <exception>
+#include <memory>
+#endif
+
+// Temporarily undefine IDA SDK macros that conflict with third-party libraries
+#ifdef snprintf
+#undef snprintf
+#endif
+#ifdef wait
+#undef wait
+#endif
+#ifdef fgetc
+#undef fgetc
+#endif
+
+// Third party headers
 #include "httplib.h"
 #include "json.hpp"
+
+#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
+#include <openssl/x509_vfy.h>
+#endif
+
+// Redefine IDA SDK macros after third-party includes
+#define snprintf        dont_use_snprintf
+#define wait            dont_use_wait
+#define fgetc           dont_use_fgetc
+
+// Local headers
 #include "helper.h"
 
-#include <idp.hpp>
-#include <ida.hpp>
-#include <loader.hpp>
-#include <kernwin.hpp>
-#include <funcs.hpp>
-#include <name.hpp>
-#include <hexrays.hpp>
+#if defined(_WIN32)
+#include <windows.h>
+#include <shlwapi.h>
+#else
+#include <unistd.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#endif
 
+#if defined(_WIN32)
+#include <windows.h>
+#include <shlwapi.h>
+#endif
+
+#if defined(_WIN32)
 #pragma comment(lib, "Advapi32.lib")
+#endif
 
-std::string GetResponseFromModel(
-    std::string model,
-    std::string api_key,
-    std::string system_prompt,
-    std::string user_prompt
+namespace {
+
+#if defined(_WIN32)
+// Windows registry-based config remains for backward compatibility.
+#else
+// Cross-platform config stored as JSON under ~/.config/BinaryLens/config.json
+
+qstring GetConfigPath() {
+    qstring config_path;
+    qstring home;
+    if (qgetenv("HOME", &home)) {
+        config_path = home;
+        config_path += "/.config/BinaryLens";
+
+        // Ensure directory exists using IDA SDK compatible method
+#ifdef __APPLE__
+        qmkdir(config_path.c_str(), 0755);
+#endif
+        config_path += "/config.json";
+    } else {
+        config_path = "/tmp/BinaryLens_config.json";
+    }
+    return config_path;
+}
+#endif
+
+} // namespace
+
+qstring GetResponseFromModel(
+    const qstring& model,
+    const qstring& api_key,
+    const qstring& system_prompt,
+    const qstring& user_prompt
 ) {
-    std::string host;
-    std::string chat_endpoint;
+    // Log the API call attempt
+    ThreadLogMessage(LOG_PATH, 0, "=== GetResponseFromModel called ===\n");
+    ThreadLogMessage(LOG_PATH, 0, "Model: %s\n", model.c_str());
+    ThreadLogMessage(LOG_PATH, 0, "API Key length: %d\n", static_cast<int>(api_key.length()));
+    ThreadLogMessage(LOG_PATH, 0, "System prompt length: %d\n", static_cast<int>(system_prompt.length()));
+    ThreadLogMessage(LOG_PATH, 0, "User prompt length: %d\n", static_cast<int>(user_prompt.length()));
+
+    qstring host;
+    qstring chat_endpoint;
     int max_token_len;
+    bool use_tls = false;
+    int port = 1234;
+    bool allow_empty_api_key = false;
 
     nlohmann::json body = {
-        {"model", model},
+        {"model", model.c_str()},
         {"messages", {
-            {{"role", "system"}, {"content", system_prompt}},
-            {{"role", "user"}, {"content", user_prompt}}
+            {{"role", "system"}, {"content", system_prompt.c_str()}},
+            {{"role", "user"}, {"content", user_prompt.c_str()}}
         }}
     };
 
-    if (ContainsSubstring(model, "gemini")) {
+    if (model.find("gemini") != BADADDR) {
         host = "generativelanguage.googleapis.com";
-        chat_endpoint = "/v1beta/openai/chat/completions";
+        chat_endpoint = "/v1beta/openai/chat/completions?key=";
+        chat_endpoint += api_key.c_str();
         max_token_len = 950000;
+        ThreadLogMessage(LOG_PATH, 0, "[DEBUG] Gemini endpoint constructed: %s\n", chat_endpoint.c_str());
+        ThreadLogMessage(LOG_PATH, 0, "[DEBUG] Gemini API key length: %d\n", static_cast<int>(api_key.length()));
     }
-    else if (ContainsSubstring(model, "deepseek")) {
+    else if (model.find("deepseek") != BADADDR) {
         host = "api.deepseek.com";
         chat_endpoint = "/v1/chat/completions";
         max_token_len = 127000;
@@ -51,15 +138,67 @@ std::string GetResponseFromModel(
         // Set the deepseek output token to max, as the default is 4k
         body["max_tokens"] = 8192;
     }
-    else if (ContainsSubstring(model, "gpt")) {
-        host = "api.openai.com";
+    else if (model.find("gpt") != BADADDR) {
+        host = "localhost";
         chat_endpoint = "/v1/chat/completions";
-        max_token_len = 270000;
+        max_token_len = 131072;
+        use_tls = false;
+        allow_empty_api_key = true;
+        port = 1234;
     }
     else {
         ThreadLogMessage(LOG_PATH, 3, "Unsupported model: %s\n", model.c_str());
-        return std::string();
+        return qstring();
     }
+
+    ThreadLogMessage(LOG_PATH, 0, "Using host: %s, endpoint: %s\n", host.c_str(), chat_endpoint.c_str());
+
+    // Normalize host/scheme/port for HTTP client
+    std::string host_str = host.c_str();
+    if (host_str.rfind("http://", 0) == 0) {
+        use_tls = false;
+        host_str = host_str.substr(7);
+    } else if (host_str.rfind("https://", 0) == 0) {
+        use_tls = true;
+        host_str = host_str.substr(8);
+    }
+
+    std::string host_only = host_str;
+    const auto colon_pos = host_str.find(':');
+    if (colon_pos != std::string::npos) {
+        host_only = host_str.substr(0, colon_pos);
+        const auto port_str = host_str.substr(colon_pos + 1);
+        if (!port_str.empty()) {
+            const int parsed_port = std::atoi(port_str.c_str());
+            if (parsed_port > 0) {
+                port = parsed_port;
+            }
+        }
+    }
+
+    if (!use_tls && port == 443) {
+        port = 80;
+    }
+
+    // Validate API key presence for selected provider
+    if (model.find("gemini") != BADADDR) {
+        if (api_key.length() == 0) {
+            ThreadLogMessage(LOG_PATH, 3, "API key not provided for Gemini. Please set `gemini_api_key`.\n");
+            return qstring();
+        }
+    } else {
+        if (api_key.length() == 0 && !allow_empty_api_key) {
+            ThreadLogMessage(LOG_PATH, 3, "API key not provided. Please set the API key for the selected provider.\n");
+            return qstring();
+        }
+    }
+
+    // DEBUG: Print API key to IDA console (temporary) to verify configuration
+    /*if (model.find("gemini") != BADADDR) {
+        ThreadLogMessage(LOG_PATH, 1, "DEBUG: Gemini API key: %s\n", api_key.c_str());
+    } else {
+        ThreadLogMessage(LOG_PATH, 1, "DEBUG: API key for provider (%s): %s\n", model.c_str(), api_key.c_str());
+    }*/
 
     int estimated_token_len = static_cast<int>(user_prompt.length() / 2.31);
     ThreadLogMessage(LOG_PATH, 0, "Estimated token length of the request: %d\n", estimated_token_len);
@@ -68,36 +207,147 @@ std::string GetResponseFromModel(
         ThreadLogMessage(LOG_PATH, 3, "The given request is too large for the selected model (%s). "
             "Please choose a smaller binary or function.\n", model.c_str()
         );
-        return std::string();
+        return qstring();
     }
 
-    httplib::SSLClient cli(host.c_str());
-    cli.set_read_timeout(1200, 0);
-    cli.set_write_timeout(600, 0);
+    ThreadLogMessage(LOG_PATH, 0, "Creating client...\n");
+    ThreadLogMessage(LOG_PATH, 0, "Host URL: %s (port %d, tls=%s)\n", host_only.c_str(), port, use_tls ? "true" : "false");
 
-    ThreadLogMessage(LOG_PATH, 0, "Client created for host: %s\n", host.c_str());
+    std::unique_ptr<httplib::Client> http_cli;
+#if defined(CPPHTTPLIB_OPENSSL_SUPPORT)
+    std::unique_ptr<httplib::SSLClient> https_cli;
+#endif
 
-    cli.set_default_headers({
-        {"Authorization", "Bearer " + api_key},
-        {"Content-Type", "application/json"}
-        });
+    std::string found_ca;
+    if (use_tls) {
+        // Detect CA bundle and configure SSL paths
+        std::vector<std::string> ca_candidates = {
+            "/opt/homebrew/etc/openssl@3/cert.pem",
+            "/opt/homebrew/etc/openssl/cert.pem",
+            "/usr/local/etc/openssl/cert.pem",
+            "/opt/local/etc/openssl3/cert.pem",
+            "/opt/local/libexec/openssl3/cert.pem",
+            "/etc/ssl/certs/ca-certificates.crt",
+            "/etc/ssl/certs/ca-bundle.crt",
+            "/etc/ssl/cert.pem"
+        };
 
-    ThreadLogMessage(LOG_PATH, 0, "Default headers set\n");
+        struct stat st;
+        for (const auto &p : ca_candidates) {
+            if (stat(p.c_str(), &st) == 0) {
+                found_ca = p;
+                break;
+            }
+        }
+
+        if (!found_ca.empty()) {
+            qsetenv("SSL_CERT_FILE", found_ca.c_str());
+            qsetenv("CURL_CA_BUNDLE", found_ca.c_str());
+            ThreadLogMessage(LOG_PATH, 0, "Using CA bundle: %s\n", found_ca.c_str());
+        } else {
+            // Fallback values (may work on some setups)
+            qsetenv("SSL_CERT_FILE", "/usr/local/etc/openssl/cert.pem");
+            qsetenv("SSL_CERT_DIR", "/System/Library/OpenSSL");
+            qsetenv("CURL_CA_BUNDLE", "/usr/local/etc/openssl/cert.pem");
+            ThreadLogMessage(LOG_PATH, 3, "[WARNING] No CA bundle found in common locations; HTTPS may fail.\n");
+        }
+    }
+
+    // Build headers
+    httplib::Headers headers;
+    if (model.find("gemini") != BADADDR) {
+        qstring auth_header = "Bearer ";
+        auth_header += api_key;
+        headers = {
+            {"Content-Type", "application/json"},
+            {"x-goog-api-key", api_key.c_str()},
+            {"Authorization", auth_header.c_str()}
+        };
+        ThreadLogMessage(LOG_PATH, 0, "Headers set for Gemini (URL key + x-goog-api-key + Authorization)\n");
+    } else {
+        if (api_key.length() == 0 && !allow_empty_api_key) {
+            ThreadLogMessage(LOG_PATH, 3, "API key is empty; cannot set Authorization header.\n");
+            return qstring();
+        }
+        if (api_key.length() > 0) {
+            qstring auth_header = "Bearer ";
+            auth_header += api_key;
+            headers = {
+                {"Authorization", auth_header.c_str()},
+                {"Content-Type", "application/json"}
+            };
+            ThreadLogMessage(LOG_PATH, 0, "Headers set with Bearer token\n");
+        } else {
+            headers = {
+                {"Content-Type", "application/json"}
+            };
+            ThreadLogMessage(LOG_PATH, 0, "Headers set without Authorization (local endpoint)\n");
+        }
+    }
 
     auto dumpped_body = body.dump();
-
+    ThreadLogMessage(LOG_PATH, 0, "Request body size: %d bytes\n", static_cast<int>(dumpped_body.length()));
     ThreadLogMessage(LOG_PATH, 0, "Body dumped successfully\n");
+    ThreadLogMessage(LOG_PATH, 0, "Sending POST request...\n");
+    ThreadLogMessage(LOG_PATH, 0, "[DEBUG] Full URL: %s://%s:%d%s\n", use_tls ? "https" : "http", host_only.c_str(), port, chat_endpoint.c_str());
+    ThreadLogMessage(LOG_PATH, 0, "[DEBUG] Request body preview: %.200s...\n", dumpped_body.c_str());
 
-    auto res = cli.Post(chat_endpoint, dumpped_body, "application/json");
+    httplib::Result res;
+    if (use_tls) {
+#if defined(CPPHTTPLIB_OPENSSL_SUPPORT)
+        https_cli = std::make_unique<httplib::SSLClient>(host_only.c_str(), port);
+        if (!found_ca.empty()) {
+            https_cli->set_ca_cert_path(found_ca, std::string());
+        }
+        https_cli->enable_server_certificate_verification(true);
+        https_cli->enable_server_hostname_verification(true);
+        https_cli->set_read_timeout(1200, 0);
+        https_cli->set_write_timeout(600, 0);
+        https_cli->set_connection_timeout(60, 0);
+        if (!https_cli->is_valid()) {
+            ThreadLogMessage(LOG_PATH, 3, "[SSL DEBUG] SSLClient created but invalid (no SSL context)\n");
+        } else {
+            long init_vr = https_cli->get_openssl_verify_result();
+            ThreadLogMessage(LOG_PATH, 0, "[SSL DEBUG] Initial OpenSSL verify result: %ld\n", init_vr);
+        }
+        res = https_cli->Post(chat_endpoint.c_str(), headers, dumpped_body, "application/json");
+#else
+        ThreadLogMessage(LOG_PATH, 3, "[ERROR] HTTPS requested but httplib built without OpenSSL support.\n");
+        return qstring();
+#endif
+    } else {
+        http_cli = std::make_unique<httplib::Client>(host_only.c_str(), port);
+        http_cli->set_read_timeout(1200, 0);
+        http_cli->set_write_timeout(600, 0);
+        http_cli->set_connection_timeout(60, 0);
+        res = http_cli->Post(chat_endpoint.c_str(), headers, dumpped_body, "application/json");
+    }
 
-    ThreadLogMessage(LOG_PATH, 0, "Request sent to endpoint: %s\n", chat_endpoint.c_str());
+    ThreadLogMessage(LOG_PATH, 0, "Client created and SSL paths configured for host: %s\n", host.c_str());
+    ThreadLogMessage(LOG_PATH, 0, "Request completed\n");
 
     if (!res) {
+        ThreadLogMessage(LOG_PATH, 3, "[ERROR] HTTP request returned null response\n");
+        ThreadLogMessage(LOG_PATH, 3, "[ERROR] This usually indicates a connection or SSL/TLS failure\n");
         ThreadLogMessage(LOG_PATH, 3, "Failed to get a response from the model. "
-            "Please check your internet connection and try again later.\n"
+            "Please check your internet connection and SSL configuration. "
+            "Try again later.\n"
         );
-        return std::string();
+#if defined(CPPHTTPLIB_OPENSSL_SUPPORT)
+        if (https_cli) {
+            long vr = https_cli->get_openssl_verify_result();
+            const char* vr_str = X509_verify_cert_error_string((int)vr);
+            ThreadLogMessage(LOG_PATH, 3, "[SSL DEBUG] OpenSSL verify result after failure: %ld (%s)\n", vr, vr_str ? vr_str : "<null>");
+        }
+#endif
+        return qstring();
     }
+
+    ThreadLogMessage(LOG_PATH, 0, "[DEBUG] HTTP response received\n");
+    ThreadLogMessage(LOG_PATH, 0, "[DEBUG] Response status: %d\n", res->status);
+    ThreadLogMessage(LOG_PATH, 0, "[DEBUG] Response headers count: %d\n", static_cast<int>(res->headers.size()));
+    ThreadLogMessage(LOG_PATH, 0, "[DEBUG] Response body length: %d\n", static_cast<int>(res->body.length()));
+    ThreadLogMessage(LOG_PATH, 0, "[DEBUG] Response body preview: %.200s...\n", res->body.c_str());
 
     if (res->status != 200) {
         // Try to parse the error message from the response
@@ -105,11 +355,11 @@ std::string GetResponseFromModel(
         try {
             error_data = nlohmann::json::parse(res->body);
 
-            std::string error_message;
+            qstring error_message;
             if (error_data.is_array())
-                error_message = error_data[0]["error"]["message"];
+                error_message = error_data[0]["error"]["message"].get<std::string>().c_str();
             else
-                error_message = error_data["error"]["message"];
+                error_message = error_data["error"]["message"].get<std::string>().c_str();
 
             ThreadLogMessage(LOG_PATH, 3, "Request to (%s) rejected, with error:"
                 "\n\n%s\n", model.c_str(), error_message.c_str()
@@ -120,26 +370,29 @@ std::string GetResponseFromModel(
             ThreadLogMessage(LOG_PATH, 3, "Failed to get a response from the model. "
                 "Please try again later. Failed with status (%d).\n", res->status
             );
-            ThreadLogMessage(LOG_PATH, 0, "Response JSON:\n%s\n", error_data.dump(4).c_str());
+            ThreadLogMessage(LOG_PATH, 0, "Response body:\n%s\n", res->body.c_str());
         }
-        return std::string();
+        return qstring();
     }
 
     nlohmann::json data;
-    std::string model_response;
+    qstring model_response;
 
     try {
         data = nlohmann::json::parse(res->body);
-        model_response = data["choices"][0]["message"]["content"];
+        auto content_str = data["choices"][0]["message"]["content"].get<std::string>();
+        model_response = content_str.c_str();
+        ThreadLogMessage(LOG_PATH, 0, "Successfully parsed response, length: %d\n", static_cast<int>(model_response.length()));
     }
-    catch (const std::exception& e) {
+    catch (...) {
         ThreadLogMessage(LOG_PATH, 3, "Failed to get a response from the model. "
             "Model request was rejected unexpectedly. Please try again later.\n"
         );
-        ThreadLogMessage(LOG_PATH, 0, "Response JSON:\n%s\n", data.dump(4).c_str());
-        return std::string();
+        ThreadLogMessage(LOG_PATH, 0, "Response body for debugging:\n%s\n", res->body.c_str());
+        return qstring();
     }
 
+    ThreadLogMessage(LOG_PATH, 0, "=== GetResponseFromModel completed successfully ===\n");
     return model_response;
 }
 
@@ -158,7 +411,7 @@ bool LogMessage(const char* path, int display_type, const char* format, ...) {
         return false;
     }
 
-    char* buf = (char*)malloc(len + 1);
+    char* buf = (char*)qalloc(len + 1);
     if (!buf) {
         msg("[BinaryLens] WARNING: Memory allocation failed for log string\n");
         va_end(args);
@@ -169,9 +422,9 @@ bool LogMessage(const char* path, int display_type, const char* format, ...) {
     va_end(args);
 
     FILE* logfile = qfopen(path, "a");
-    if (!logfile) {
+    if (logfile == NULL) {
         msg("[BinaryLens] WARNING: Failed to open log file\n");
-        free(buf);
+        qfree(buf);
         return false;
     }
 
@@ -185,7 +438,7 @@ bool LogMessage(const char* path, int display_type, const char* format, ...) {
         warning("%s", buf);
 
     qfclose(logfile);
-    free(buf);
+    qfree(buf);
 
     return true;
 }
@@ -237,6 +490,7 @@ bool ThreadLogMessage(const char* path, int display_type, const char* format, ..
 }
 
 bool WriteRegistryData(const char* sub_key, const char* value_name, const char* data_to_write) {
+#if defined(_WIN32)
     HKEY hKey;
 
     if (RegCreateKeyExA(
@@ -263,14 +517,62 @@ bool WriteRegistryData(const char* sub_key, const char* value_name, const char* 
         strlen(data_to_write) + 1
     ) != ERROR_SUCCESS) {
         LogMessage(LOG_PATH, 3, "Failed to write data to registry. Error code: %ld\n", GetLastError());
+        RegCloseKey(hKey);
         return false;
     }
 
     RegCloseKey(hKey);
     return true;
+#else
+    (void)sub_key; // Unused on non-Windows; kept for API compatibility.
+
+    const auto cfg_path = GetConfigPath();
+    nlohmann::json j;
+
+    // Try to read existing config
+    auto in_file = qfopen(cfg_path.c_str(), "r");
+    if (in_file) {
+        qfseek(in_file, 0, SEEK_END);
+        int64 size = qftell(in_file);
+        qfseek(in_file, 0, SEEK_SET);
+
+        char* content = (char*)qalloc(size + 1);
+        if (content) {
+            qfread(in_file, content, size);
+            content[size] = 0;
+            try {
+                j = nlohmann::json::parse(content);
+            } catch (...) {
+                j = nlohmann::json::object();
+            }
+            qfree(content);
+        }
+        qfclose(in_file);
+    }
+
+    if (j.is_null()) {
+        j = nlohmann::json::object();
+    }
+
+    j[value_name] = data_to_write;
+
+    // Write config file
+    auto out_file = qfopen(cfg_path.c_str(), "w");
+    if (!out_file) {
+        LogMessage(LOG_PATH, 3, "Failed to open config file for writing: %s\n", cfg_path.c_str());
+        return false;
+    }
+    auto json_str = j.dump(2);
+    qfwrite(out_file, json_str.c_str(), json_str.length());
+    qfclose(out_file);
+    return true;
+#endif
 }
 
 bool ReadRegistryData(const char* sub_key, const char* value_name, std::string& read_data) {
+    ThreadLogMessage(LOG_PATH, 0, "[DEBUG] Reading config for key: %s, value: %s\n", sub_key, value_name);
+
+#if defined(_WIN32)
     HKEY hKey;
 
     if (RegCreateKeyExA(
@@ -298,6 +600,55 @@ bool ReadRegistryData(const char* sub_key, const char* value_name, std::string& 
     read_data = std::string(buffer);
     RegCloseKey(hKey);
     return true;
+#else
+    (void)sub_key; // Unused on non-Windows; kept for API compatibility.
+
+    const auto cfg_path = GetConfigPath();
+    ThreadLogMessage(LOG_PATH, 0, "[DEBUG] Config file path: %s\n", cfg_path.c_str());
+
+    auto in_file = qfopen(cfg_path.c_str(), "r");
+    if (!in_file) {
+        ThreadLogMessage(LOG_PATH, 0, "[DEBUG] Config file not found: %s\n", cfg_path.c_str());
+        return false;
+    }
+
+    qfseek(in_file, 0, SEEK_END);
+    int64 size = qftell(in_file);
+    qfseek(in_file, 0, SEEK_SET);
+
+    char* content = (char*)qalloc(size + 1);
+    if (!content) {
+        qfclose(in_file);
+        return false;
+    }
+
+    qfread(in_file, content, size);
+    content[size] = 0;
+    qfclose(in_file);
+
+    nlohmann::json j;
+    try {
+        j = nlohmann::json::parse(content);
+    } catch (...) {
+        qfree(content);
+        return false;
+    }
+    qfree(content);
+
+    if (!j.contains(value_name))
+        return false;
+
+    try {
+        read_data = j.at(value_name).get<std::string>();
+        ThreadLogMessage(LOG_PATH, 0, "Successfully read config value: %s = %s\n", value_name, read_data.c_str());
+    }
+    catch (...) {
+        ThreadLogMessage(LOG_PATH, 0, "Config value not found: %s\n", value_name);
+        return false;
+    }
+
+    return true;
+#endif
 }
 
 std::string WrapText(const std::string& text, size_t max_line_length) {
@@ -328,39 +679,45 @@ std::string WrapText(const std::string& text, size_t max_line_length) {
     return output.str();
 }
 
-bool SaveFileContent(const std::string& filepath, const std::string& content) {
-    std::ofstream file(filepath, std::ios::binary);
-    if (!file.is_open()) {
+bool SaveFileContent(const qstring& filepath, const qstring& content) {
+    auto file = qfopen(filepath.c_str(), "wb");
+    if (!file) {
         LogMessage(LOG_PATH, 3, "Failed to open file for writing: %s\n", filepath.c_str());
         return false;
     }
 
-    file.write(content.data(), content.size());
-    if (!file) {
-        LogMessage(LOG_PATH, 3, "Failed to write to file: %s\n", filepath.c_str());
-        return false;
-    }
+    qfwrite(file, content.c_str(), content.length());
+    qfclose(file);
 
     return true;
 }
 
-std::string GetFileContent(const std::string& filepath) {
-    std::ifstream file(filepath, std::ios::binary);
-    if (!file.is_open()) {
+qstring GetFileContent(const qstring& filepath) {
+    auto file = qfopen(filepath.c_str(), "rb");
+    if (!file) {
         LogMessage(LOG_PATH, 3, "Failed to open file: %s\n", filepath.c_str());
-        return std::string();
+        return qstring();
     }
 
-    std::stringstream buffer;
-    buffer << file.rdbuf();
-    std::string file_content = buffer.str();
+    // Get file size
+    qfseek(file, 0, SEEK_END);
+    int64 size = qftell(file);
+    qfseek(file, 0, SEEK_SET);
 
-    if (file_content.empty()) {
-        LogMessage(LOG_PATH, 3, "File is empty: %s\n", filepath.c_str());
-        return std::string();
+    // Read entire file into buffer
+    char* buffer = (char*)qalloc(size + 1);
+    if (!buffer) {
+        qfclose(file);
+        return qstring();
     }
 
-    return file_content;
+    qfread(file, buffer, size);
+    buffer[size] = '\0';  // Null terminate
+    qfclose(file);
+
+    qstring result(buffer);
+    qfree(buffer);
+    return result;
 }
 
 void ltrim(std::string& s) {
@@ -389,4 +746,55 @@ void RemoveSubstring(std::string& str, const std::string& target) {
 
 bool ContainsSubstring(const std::string& str, const std::string& target) {
     return str.find(target) != std::string::npos;
+}
+
+bool CreateTempFile(qstring& out_path, const char* prefix) {
+#if defined(_WIN32)
+    char temp_dir[MAX_PATH];
+    char temp_file_path[MAX_PATH];
+
+    if (GetTempPathA(MAX_PATH, temp_dir) == 0) {
+        LogMessage(LOG_PATH, 3, "ERROR: GetTempPathA failed: %ld\n", GetLastError());
+        return false;
+    }
+
+    if (GetTempFileNameA(temp_dir, prefix, 0, temp_file_path) == 0) {
+        LogMessage(LOG_PATH, 3, "ERROR: GetTempFileNameA failed: %ld\n", GetLastError());
+        return false;
+    }
+
+    out_path = temp_file_path;
+    return true;
+#else
+    // Create a unique temp file name manually
+    static int counter = 0;
+    qstring filename = qstring(prefix) + "-" + std::to_string(getpid()).c_str() + "-" + std::to_string(++counter).c_str();
+    std::filesystem::path full = std::filesystem::temp_directory_path() / filename.c_str();
+
+    std::error_code ec;
+    std::filesystem::create_directories(full.parent_path(), ec);
+
+    // Create temp file
+    auto touch = qfopen(full.string().c_str(), "w");
+    if (touch) {
+        qfclose(touch);
+    }
+
+    if (!std::filesystem::exists(full)) {
+        LogMessage(LOG_PATH, 3, "ERROR: Failed to create temp file: %s\n", full.string().c_str());
+        return false;
+    }
+
+    out_path = full.string().c_str();
+    return true;
+#endif
+}
+
+void RemoveFile(const std::string& path) {
+#if defined(_WIN32)
+    DeleteFileA(path.c_str());
+#else
+    std::error_code ec;
+    std::filesystem::remove(path, ec);
+#endif
 }
